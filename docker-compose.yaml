@@ -1,0 +1,203 @@
+services:
+  postgresql:
+    image: postgres:14
+    container_name: ${COMPOSE_PROJECT_NAME}-postgresql
+    volumes:
+      - ./volumes/var/lib/postgresql/data:/var/lib/postgresql/data:rw
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
+    env_file:
+    - .env
+    restart: always
+    expose:
+      - 5432
+    networks:
+     lan:
+       ipv4_address: ${PROJECT_IP_MASK}.2
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+
+  exim:
+    build:
+      context: build/exim/
+      args:
+        - EXIM_GID=${EXIM_GID:-500}
+        - EXIM_GROUP=${EXIM_GROUP:-vmail}
+        - EXIM_USER=${EXIM_USER:-vmail}
+        - EXIM_UID=${EXIM_UID:-500}
+    container_name: ${COMPOSE_PROJECT_NAME}-exim4
+    ports:
+      - "25:25"
+      - "465:465"
+      - "587:587"
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
+      - ./volumes/var/mail:/var/mail:rw
+      - ./volumes/etc/exim4:/etc/exim4
+      - ./volumes/etc/ssl:/etc/exim4/ssl
+      - ./volumes/var/log/exim:/var/log/exim:rw
+      - ./volumes/var/run/dovecot:/var/run/dovecot:rw
+    env_file:
+    - .env
+    restart: always
+    networks:
+     lan:
+       ipv4_address: ${PROJECT_IP_MASK}.3
+
+  dovecot:
+    container_name: ${COMPOSE_PROJECT_NAME}-dovecot
+    ports:
+      - "993:993" # - SSL/IMAP | 143 - No SSL IMAP
+      - "995:995" # - SSL/POP3 | 110 - No SSL POP3
+      - "143:143"
+    build:
+      context: build/dovecot/
+      args:
+        - vmail_gid=${EXIM_GID:-500}
+        - VMAIL_GROUP=${EXIM_GROUP:-vmail}
+        - VMAIL_USER=${EXIM_USER:-vmail}
+        - vmail_uid=${EXIM_UID:-500}
+        - dovecot_branch=release-${DOVECOT_VERSION}
+        - dovecot_tag=${DOVECOT_VERSION}
+        - pigeonhole_branch=${pigeonhole_branch:-release-0.5.20}
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
+      - ./volumes/var/mail:/var/mail:rw
+      - ./volumes/etc/dovecot:/etc/dovecot
+      - ./volumes/etc/ssl:/etc/dovecot/ssl
+      - ./volumes/var/log/dovecot:/var/log/dovecot:rw
+      - ./volumes/var/run/dovecot:/var/run/dovecot:rw
+    env_file:
+    - .env
+    restart: always
+    networks:
+     lan:
+       ipv4_address: ${PROJECT_IP_MASK}.4
+
+  postfixadmin:
+    build:
+      context: build/postfixadmin/
+    container_name: ${COMPOSE_PROJECT_NAME}-postfixadmin
+    env_file:
+      - .env
+    ports:
+      - "8887:80"
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
+      - /var/mail:/var/mail:rw
+      - ./volumes/etc/postfixadmin/config.inc.php:/var/www/html/config.local.php:ro
+      - ./volumes/etc/postfixadmin/dbconfig.inc.php:/var/www/dbconfig.inc.php:ro
+      - ./volumes/etc/dovecot:/etc/dovecot
+      - ./volumes/scripts/postfixadmin:/var/www/scripts:rw
+      - ./volumes/etc/ssl:/etc/dovecot/ssl
+    networks:
+      lan:
+        ipv4_address: ${PROJECT_IP_MASK}.5
+    restart: always
+    environment:
+      POSTFIXADMIN_DB_TYPE: ${POSTFIXADMIN_DB_TYPE}
+      POSTFIXADMIN_DB_HOST: ${POSTFIXADMIN_DB_HOST}
+      POSTFIXADMIN_DB_USER: ${POSTFIXADMIN_DB_USER}
+      POSTFIXADMIN_DB_NAME: ${POSTFIXADMIN_DB_NAME}
+      POSTFIXADMIN_DB_PASSWORD: ${POSTFIXADMIN_DB_PASSWORD}
+
+  rainloop:
+    build:
+      context: build/rainloop/
+    container_name: ${COMPOSE_PROJECT_NAME}-rainloop
+    env_file:
+      - .env
+    ports:
+      - "8888:8888"
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
+      - ./volumes/rainloop/data:/rainloop/data:rw
+    networks:
+      lan:
+        ipv4_address: ${PROJECT_IP_MASK}.6
+    restart: always
+
+  redis:
+    image: redis:6
+    container_name: ${COMPOSE_PROJECT_NAME}-redis
+    env_file:
+      - .env
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
+      - ./volumes/var/lib/redis:/data:rw
+    networks:
+      lan:
+        ipv4_address: ${PROJECT_IP_MASK}.7
+    restart: always
+
+  rspam:
+    container_name: ${COMPOSE_PROJECT_NAME}-rspam
+    restart: unless-stopped
+    ports:
+      - "11334:11334"
+    build:
+      context: ./build/rspam
+      args:
+        RSPAM_gid: 0
+        RSPAM_uid: 500
+        RSPAM_GROUP: root
+        RSPAM_USER : rspamd
+        RSPAM_IP: ${PROJECT_IP_MASK}.8
+        RSPAM_REDIS_DB: 7
+    depends_on:
+     - redis
+     - clamav
+    volumes:
+     - /etc/localtime:/etc/localtime:ro
+     - /etc/timezone:/etc/timezone:ro
+     - ./volumes/var/lib/rspamd:/var/lib/rspamd
+     - ./volumes/var/log/rspam:/var/log/rspamd
+    environment:
+     - REDIS_PASSWORD=${REDIS_PASSWORD}
+     - REDIS_PORT=${REDIS_PORT}
+     - RSPAM_GROUP=root
+     - RSPAM_USER=rspamd
+     - RSPAM_enable_password=${RSPAM_enable_password}
+     - RSPAM_password=${RSPAM_password}
+     - RSPAM_REDIS_DB=7
+     - RSPAM_IP=${PROJECT_IP_MASK}.8
+     - CLAMAV_IP=${PROJECT_IP_MASK}.9
+    networks:
+      lan:
+        ipv4_address: ${PROJECT_IP_MASK}.8
+        aliases:
+         - rspam
+
+  clamav:
+    container_name: ${COMPOSE_PROJECT_NAME}-clamav
+    image: tiredofit/clamav:latest
+    restart: always
+    environment:
+     - CLAMAV_IP=${PROJECT_IP_MASK}.9
+     - DEFINITIONS_UPDATE_FREQUENCY=60
+     - SETUP_TYPE=MANUAL
+    volumes:
+     - /etc/localtime:/etc/localtime:ro
+     - /etc/timezone:/etc/timezone:ro
+     - ./volumes/var/lib/clamav:/data
+    networks:
+      lan:
+        ipv4_address: ${PROJECT_IP_MASK}.9
+        aliases:
+         - clamav
+
+networks:
+  lan:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: ${PROJECT_IP_MASK}.0/28
+    driver_opts:
+      com.docker.network.bridge.name: "br-${COMPOSE_PROJECT_NAME}"
